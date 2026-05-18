@@ -1,1 +1,1 @@
-"""Utility functions for GraspCorrect."""
+"""Utility helpers."""

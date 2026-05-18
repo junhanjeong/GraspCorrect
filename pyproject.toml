@@ -5,22 +5,21 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "graspcorrect"
 version = "0.1.0"
-description = "Reproduction-oriented implementation of GraspCorrect for RLBench and CALVIN."
+description = "RLBench-focused reproduction implementation of GraspCorrect."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.8"
 license = {text = "MIT"}
 authors = [{name = "GraspCorrect reproduction"}]
 dependencies = [
     "numpy>=1.23",
     "Pillow>=9.5",
-    "PyYAML>=6.0",
     "tqdm>=4.66",
 ]
 
 [project.optional-dependencies]
 train = [
-    "torch>=2.1",
-    "torchvision>=0.16",
+    "torch>=1.13",
+    "torchvision>=0.14",
 ]
 vlm = [
     "openai>=1.0",
@@ -28,11 +27,16 @@ vlm = [
 vision = [
     "opencv-python>=4.8",
 ]
+rlbench = [
+    "typed-argument-parser",
+    "einops",
+    "open3d",
+]
 dev = [
     "pytest>=7.4",
 ]
 all = [
-    "graspcorrect[train,vlm,vision,dev]",
+    "graspcorrect[train,vlm,vision,rlbench,dev]",
 ]
 
 [tool.setuptools.packages.find]

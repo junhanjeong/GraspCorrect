@@ -5,72 +5,70 @@ import argparse
 import sys
 from pathlib import Path
 
-import yaml
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from graspcorrect.data.dataset import GraspCorrectionDataset
-from graspcorrect.policies.gcbc import GCBCConfig, GCBCDiffusionPolicy
+from graspcorrect.data import GraspCorrectionDataset
+from graspcorrect.policies import GCBCConfig, GCBCDiffusionPolicy
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train the GraspCorrect GCBC DDPM policy.")
+    parser = argparse.ArgumentParser(description="Train GraspCorrect GCBC.")
     parser.add_argument("--manifest", required=True)
-    parser.add_argument("--output", required=True)
-    parser.add_argument("--config", default="configs/default.yaml")
+    parser.add_argument("--output-dir", required=True)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--lr", type=float, default=5e-4)
+    parser.add_argument("--warmup-steps", type=int, default=2000)
+    parser.add_argument("--image-size", type=int, default=224)
+    parser.add_argument("--diffusion-steps", type=int, default=100)
     args = parser.parse_args()
 
-    try:
-        import torch
-        from torch.utils.data import DataLoader
-    except Exception as exc:
-        raise ImportError("Training requires torch. Install with `pip install -e .[train]`.") from exc
+    import torch
+    from torch.utils.data import DataLoader
 
-    with open(args.config, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f) or {}
-    gcfg = cfg.get("gcbc", {})
-    policy_cfg = GCBCConfig(
-        image_size=int(gcfg.get("image_size", 224)),
-        action_dim=int(gcfg.get("action_dim", 7)),
-        hidden_dim=int(gcfg.get("hidden_dim", 256)),
-        diffusion_steps=int(gcfg.get("diffusion_steps", 100)),
-        beta_start=float(gcfg.get("beta_start", 0.0001)),
-        beta_end=float(gcfg.get("beta_end", 0.02)),
-        position_loss_weight=float(gcfg.get("position_loss_weight", 0.2)),
-    )
-    device = torch.device(args.device if torch.cuda.is_available() or args.device == "cpu" else "cpu")
-    dataset = GraspCorrectionDataset(args.manifest, image_size=policy_cfg.image_size)
+    device = torch.device(args.device if args.device == "cpu" or torch.cuda.is_available() else "cpu")
+    cfg = GCBCConfig(image_size=args.image_size, diffusion_steps=args.diffusion_steps)
+    dataset = GraspCorrectionDataset(args.manifest, image_size=cfg.image_size, augment=True)
     loader = DataLoader(
         dataset,
-        batch_size=int(gcfg.get("batch_size", 256)),
+        batch_size=args.batch_size,
         shuffle=True,
-        num_workers=int(gcfg.get("num_workers", 4)),
-        drop_last=True,
+        num_workers=args.num_workers,
+        drop_last=False,
     )
-    policy = GCBCDiffusionPolicy(policy_cfg).to(device)
-    opt = torch.optim.Adam(policy.parameters(), lr=float(gcfg.get("learning_rate", 5e-4)))
-    epochs = int(gcfg.get("epochs", 50))
-    out = Path(args.output)
+    policy = GCBCDiffusionPolicy(cfg).to(device)
+    opt = torch.optim.Adam(policy.parameters(), lr=args.lr)
+
+    def lr_lambda(step: int) -> float:
+        if args.warmup_steps <= 0:
+            return 1.0
+        return min(1.0, float(step + 1) / float(args.warmup_steps))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+    out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    step = 0
-    for epoch in range(epochs):
+    global_step = 0
+    for epoch in range(args.epochs):
         policy.train()
-        running = 0.0
+        total = 0.0
         for batch in loader:
             batch = {k: v.to(device) for k, v in batch.items()}
             losses = policy.training_loss(batch)
             opt.zero_grad(set_to_none=True)
             losses["loss"].backward()
             opt.step()
-            running += float(losses["loss"].detach().cpu())
-            step += 1
-        mean_loss = running / max(len(loader), 1)
-        print(f"epoch={epoch + 1}/{epochs} loss={mean_loss:.6f}")
-        policy.save_checkpoint(out / "policy.pt")
+            scheduler.step()
+            total += float(losses["loss"].detach().cpu())
+            global_step += 1
+        mean_loss = total / max(1, len(loader))
+        print(f"epoch={epoch + 1}/{args.epochs} step={global_step} loss={mean_loss:.6f}")
+        policy.save_checkpoint(out / "latest.pt")
+    policy.save_checkpoint(out / "policy.pt")
 
 
 if __name__ == "__main__":

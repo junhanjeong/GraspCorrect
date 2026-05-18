@@ -8,6 +8,8 @@ venv/
 .venv/
 env/
 ENV/
+/.local/
+/.micromamba/
 
 # Build
 build/
@@ -16,6 +18,16 @@ dist/
 
 # Logs
 *.log
+/runs/
+
+# External dependencies and generated datasets/checkpoints
+/external/
+/data/
+
+# Paper reference files kept locally; README smoke commands only need paper/image.png.
+paper/*.pdf
+paper/figure*.png
+paper/table*.png
 
 # Jupyter
 .ipynb_checkpoints/

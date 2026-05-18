@@ -1,3 +1,3 @@
-from graspcorrect.goal_generation.compositor import GoalComposer, GoalComposerConfig
+from graspcorrect.goal_generation.compositor import GoalComposer, GoalComposition
 
-__all__ = ["GoalComposer", "GoalComposerConfig"]
+__all__ = ["GoalComposer", "GoalComposition"]

@@ -1,127 +1,119 @@
 from __future__ import annotations
 
-from typing import Iterable, List, Optional, Sequence
+from dataclasses import dataclass
+from typing import Iterable, List, Sequence
 
 import numpy as np
 
-from graspcorrect.types import GraspCandidate, Point2D
+from graspcorrect.types import GraspCandidate
 from graspcorrect.utils.image import mask_to_bool
 
 
-def boundary_points(mask: np.ndarray) -> np.ndarray:
-    """Return boundary points as Nx2 array in x,y order."""
+@dataclass
+class OrderedContour:
+    """A 1D parameterization of the largest object-mask contour."""
 
-    binary = mask_to_bool(mask)
-    padded = np.pad(binary, 1, mode="constant", constant_values=False)
+    points_xy: np.ndarray
+
+    @classmethod
+    def from_mask(cls, mask: np.ndarray) -> "OrderedContour":
+        binary = mask_to_bool(mask)
+        points = _opencv_contour(binary)
+        if points is None:
+            points = _fallback_contour(binary)
+        if len(points) < 4:
+            raise ValueError("Object contour is too small for grasp sampling.")
+        return cls(points_xy=np.asarray(points, dtype=np.float32))
+
+    def sample_uniform(self, count: int) -> List[GraspCandidate]:
+        n = len(self.points_xy)
+        indices = np.linspace(0, n, count, endpoint=False, dtype=np.int64)
+        return self._candidates_from_indices(indices)
+
+    def sample_gaussian(
+        self,
+        selected: Sequence[GraspCandidate],
+        count: int,
+        sigma_fraction: float,
+        rng: np.random.Generator,
+    ) -> List[GraspCandidate]:
+        n = len(self.points_xy)
+        centers = np.asarray([self.nearest_index(c.point) for c in selected], dtype=np.float32)
+        if centers.size == 0:
+            return self.sample_uniform(count)
+        sigma = max(1.0, float(n) * float(sigma_fraction))
+        sampled = []
+        attempts = 0
+        while len(sampled) < count and attempts < count * 20:
+            attempts += 1
+            center = float(rng.choice(centers))
+            idx = int(round(rng.normal(center, sigma))) % n
+            if idx not in sampled:
+                sampled.append(idx)
+        if len(sampled) < count:
+            extra = rng.choice(np.arange(n), size=count - len(sampled), replace=False)
+            sampled.extend([int(x) for x in extra])
+        return self._candidates_from_indices(np.asarray(sampled[:count], dtype=np.int64))
+
+    def nearest_index(self, point: Iterable[float]) -> int:
+        p = np.asarray(point, dtype=np.float32).reshape(1, 2)
+        dist = np.sum((self.points_xy - p) ** 2, axis=1)
+        return int(np.argmin(dist))
+
+    def _candidates_from_indices(self, indices: np.ndarray) -> List[GraspCandidate]:
+        out: List[GraspCandidate] = []
+        for label, idx in enumerate(indices, 1):
+            x, y = self.points_xy[int(idx) % len(self.points_xy)]
+            out.append(GraspCandidate(label=label, point=(float(x), float(y)), contour_index=int(idx)))
+        return out
+
+
+def relabel(candidates: Sequence[GraspCandidate]) -> List[GraspCandidate]:
+    return [
+        GraspCandidate(label=i + 1, point=c.point, contour_index=c.contour_index)
+        for i, c in enumerate(candidates)
+    ]
+
+
+def select_by_labels(candidates: Sequence[GraspCandidate], labels: Sequence[int]) -> List[GraspCandidate]:
+    by_label = {c.label: c for c in candidates}
+    selected = []
+    for label in labels:
+        cand = by_label.get(int(label))
+        if cand is not None:
+            selected.append(cand)
+    return selected
+
+
+def _opencv_contour(binary: np.ndarray):
+    try:
+        import cv2  # type: ignore
+
+        contours, _ = cv2.findContours(binary.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        if not contours:
+            return None
+        contour = max(contours, key=cv2.contourArea)
+        pts = contour.reshape(-1, 2)
+        return pts
+    except Exception:
+        return None
+
+
+def _fallback_contour(binary: np.ndarray) -> np.ndarray:
+    padded = np.pad(binary, 1, mode="constant")
     center = padded[1:-1, 1:-1]
-    neighbors = [
-        padded[:-2, 1:-1],
-        padded[2:, 1:-1],
-        padded[1:-1, :-2],
-        padded[1:-1, 2:],
-        padded[:-2, :-2],
-        padded[:-2, 2:],
-        padded[2:, :-2],
-        padded[2:, 2:],
-    ]
-    interior = center.copy()
-    for neighbor in neighbors:
-        interior &= neighbor
-    boundary = center & ~interior
+    eroded = (
+        center
+        & padded[:-2, 1:-1]
+        & padded[2:, 1:-1]
+        & padded[1:-1, :-2]
+        & padded[1:-1, 2:]
+    )
+    boundary = binary & ~eroded
     ys, xs = np.nonzero(boundary)
-    if xs.size == 0:
+    if len(xs) == 0:
         ys, xs = np.nonzero(binary)
-    return np.stack([xs, ys], axis=1).astype(np.float32)
-
-
-def order_points_by_angle(points: np.ndarray) -> np.ndarray:
-    if points.size == 0:
-        return points.reshape(0, 2)
-    center = points.mean(axis=0)
-    angles = np.arctan2(points[:, 1] - center[1], points[:, 0] - center[0])
-    order = np.argsort(angles)
-    return points[order]
-
-
-def ordered_contour(mask: np.ndarray) -> np.ndarray:
-    return order_points_by_angle(boundary_points(mask))
-
-
-def sample_initial_candidates(
-    mask: np.ndarray,
-    num_candidates: int,
-    rng: Optional[np.random.Generator] = None,
-) -> List[GraspCandidate]:
-    contour = ordered_contour(mask)
-    if contour.shape[0] == 0:
-        raise ValueError("Cannot sample grasp candidates from an empty contour.")
-    if rng is None:
-        rng = np.random.default_rng()
-    if contour.shape[0] >= num_candidates:
-        indices = np.linspace(0, contour.shape[0] - 1, num_candidates, dtype=int)
-    else:
-        indices = rng.choice(contour.shape[0], size=num_candidates, replace=True)
-    return [
-        GraspCandidate(label=i + 1, point=tuple(map(float, contour[idx])), contour_index=int(idx))
-        for i, idx in enumerate(indices)
-    ]
-
-
-def gaussian_resample_candidates(
-    mask: np.ndarray,
-    selected: Sequence[GraspCandidate],
-    num_candidates: int,
-    sigma_fraction: float = 0.08,
-    rng: Optional[np.random.Generator] = None,
-) -> List[GraspCandidate]:
-    contour = ordered_contour(mask)
-    if contour.shape[0] == 0:
-        raise ValueError("Cannot sample grasp candidates from an empty contour.")
-    if not selected:
-        return sample_initial_candidates(mask, num_candidates, rng)
-    if rng is None:
-        rng = np.random.default_rng()
-    sigma = max(1.0, float(contour.shape[0]) * sigma_fraction)
-    centers = np.asarray([c.contour_index for c in selected], dtype=np.float32)
-    sampled = []
-    attempts = 0
-    while len(sampled) < num_candidates and attempts < num_candidates * 20:
-        attempts += 1
-        center = float(rng.choice(centers))
-        idx = int(round(rng.normal(center, sigma))) % contour.shape[0]
-        if idx not in sampled:
-            sampled.append(idx)
-    while len(sampled) < num_candidates:
-        sampled.append(int(rng.integers(0, contour.shape[0])))
-    return [
-        GraspCandidate(label=i + 1, point=tuple(map(float, contour[idx])), contour_index=int(idx))
-        for i, idx in enumerate(sampled[:num_candidates])
-    ]
-
-
-def candidates_by_label(
-    candidates: Sequence[GraspCandidate],
-    labels: Iterable[int],
-) -> List[GraspCandidate]:
-    lookup = {candidate.label: candidate for candidate in candidates}
-    return [lookup[label] for label in labels if label in lookup]
-
-
-def contour_centroid(mask: np.ndarray) -> Point2D:
-    binary = mask_to_bool(mask)
-    ys, xs = np.nonzero(binary)
-    if xs.size == 0:
-        raise ValueError("Cannot compute centroid of an empty mask.")
-    return float(xs.mean()), float(ys.mean())
-
-
-def antipodal_score(left: Point2D, right: Point2D, centroid: Point2D) -> float:
-    left_v = np.asarray(left, dtype=np.float32) - np.asarray(centroid, dtype=np.float32)
-    right_v = np.asarray(right, dtype=np.float32) - np.asarray(centroid, dtype=np.float32)
-    distance = float(np.linalg.norm(left_v - right_v))
-    if np.linalg.norm(left_v) < 1e-6 or np.linalg.norm(right_v) < 1e-6:
-        opposite = 0.0
-    else:
-        opposite = float(-np.dot(left_v, right_v) / (np.linalg.norm(left_v) * np.linalg.norm(right_v)))
-    horizontal = abs(float(left[1] - right[1]))
-    return distance + 30.0 * opposite - 0.2 * horizontal
+    pts = np.stack([xs, ys], axis=1).astype(np.float32)
+    centroid = pts.mean(axis=0)
+    angles = np.arctan2(pts[:, 1] - centroid[1], pts[:, 0] - centroid[0])
+    return pts[np.argsort(angles)]

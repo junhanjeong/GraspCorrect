@@ -1,0 +1,34 @@
+name: graspcorrect-rlbench
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.8
+  - pip
+  - pytorch=1.13.1
+  - torchvision=0.14.1
+  - torchaudio=0.13.1
+  - pytorch-cuda=11.6
+  - pip:
+      - numpy==1.23.5
+      - pillow
+      - einops
+      - typed-argument-parser
+      - tqdm
+      - transformers
+      - absl-py
+      - matplotlib
+      - scipy
+      - tensorboard
+      - opencv-python
+      - openai>=1.0
+      - open3d
+      - blosc
+      - cffi==1.14.2
+      - diffusers==0.21.4
+      - dgl==1.1.3
+      - huggingface-hub==0.25.2
+      - setuptools==57.5.0
+      - git+https://github.com/openai/CLIP.git
