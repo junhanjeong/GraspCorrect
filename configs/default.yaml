@@ -1,0 +1,73 @@
+seed: 7
+
+vlm:
+  provider: openai
+  model: gpt-4o
+  detail: high
+  temperature: 0.0
+
+grasp_detection:
+  window: 10
+  iterations: 4
+  num_candidates: 24
+  top_n: 3
+  gaussian_sigma_fraction: 0.08
+  min_mask_area: 64
+
+goal_generation:
+  gripper_width: 12
+  gripper_length: 48
+  contact_radius: 5
+  inpaint_blur_radius: 7
+  background_fill: median
+
+gcbc:
+  image_size: 224
+  action_dim: 7
+  hidden_dim: 256
+  diffusion_steps: 100
+  beta_start: 0.0001
+  beta_end: 0.02
+  position_loss_weight: 0.2
+  learning_rate: 0.0005
+  warmup_steps: 2000
+  batch_size: 256
+  num_workers: 4
+  epochs: 50
+
+benchmarks:
+  rlbench:
+    camera: front
+    top_camera: overhead
+    tasks:
+      - stack_blocks
+      - sort_shape
+      - insert_peg
+      - stack_cups
+      - place_cups
+      - sweep_to_dustpan
+      - turn_tap
+      - put_item_in_drawer
+      - close_jar
+      - screw_bulb
+      - place_wine_at_rack_location
+      - meat_off_grill
+      - put_groceries_in_cupboard
+      - open_drawer
+      - drag_stick
+      - put_money_in_safe
+      - push_buttons
+      - slide_block_to_color_target
+  calvin:
+    split: ABC_D
+    num_sequences: 100
+
+external_repos:
+  rlbench: https://github.com/stepjam/RLBench.git
+  calvin: https://github.com/mees/calvin.git
+  diffuser_actor: https://github.com/nickgkan/3d_diffuser_actor.git
+  rvt2: https://github.com/NVlabs/RVT.git
+  act3d: https://github.com/zhouxian/act3d-chained-diffuser.git
+  peract: https://github.com/peract/peract.git
+  langsam: https://github.com/luca-medeiros/lang-segment-anything.git
+  lama: https://github.com/advimman/lama.git
